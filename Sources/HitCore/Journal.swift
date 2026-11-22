@@ -1,0 +1,234 @@
+import Combine
+import Foundation
+
+public enum SessionKind: String, Codable {
+    case focus
+    case rest
+
+    public var duration: TimeInterval { self == .focus ? 25 * 60 : 5 * 60 }
+    public var label: String { self == .focus ? "Focus" : "Short break" }
+}
+
+public enum SessionStatus: String, Codable {
+    case running
+    case paused
+    case completed
+    case stopped
+}
+
+public struct Session: Codable, Identifiable {
+    public let id: UUID
+    public let kind: SessionKind
+    public internal(set) var title: String
+    public internal(set) var notes: String
+    public let startedAt: Date
+    public internal(set) var endedAt: Date?
+    public internal(set) var status: SessionStatus
+    public let duration: TimeInterval
+    public internal(set) var remaining: TimeInterval
+    public internal(set) var deadline: Date?
+
+    public func secondsRemaining(at now: Date) -> Int {
+        let seconds = deadline.map { $0.timeIntervalSince(now) } ?? remaining
+        return Int(ceil(max(0, min(duration, seconds))))
+    }
+}
+
+public struct Workspace: Codable {
+    public let schemaVersion: Int
+    public internal(set) var draftTitle: String
+    public internal(set) var draftNotes: String
+    public internal(set) var current: Session?
+    public internal(set) var history: [Session]
+    public internal(set) var nextKind: SessionKind
+
+    fileprivate static var empty: Workspace {
+        Workspace(schemaVersion: 1, draftTitle: "", draftNotes: "", current: nil,
+                  history: [], nextKind: .focus)
+    }
+}
+
+public enum JournalError: LocalizedError {
+    case titleRequired
+    case invalidTransition
+    case unsupportedData
+
+    public var errorDescription: String? {
+        switch self {
+        case .titleRequired: return "Enter a task title before starting a focus session."
+        case .invalidTransition: return "This action is not available for the current timer state."
+        case .unsupportedData:
+            return "The saved workspace is invalid or uses an unsupported version. Your file has not been changed."
+        }
+    }
+}
+
+/// A durable workspace. Mutations publish only after the complete new state is saved atomically.
+/// Running timers use a persisted deadline; quitting or sleeping never pauses them.
+@MainActor
+public final class Journal: ObservableObject {
+    @Published public private(set) var state: Workspace
+    public let fileURL: URL
+
+    nonisolated public static var defaultFileURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Hit", isDirectory: true)
+            .appendingPathComponent("workspace.json")
+    }
+
+    public init(fileURL: URL = Journal.defaultFileURL) throws {
+        self.fileURL = fileURL
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            let loaded = try JSONDecoder().decode(Workspace.self, from: Data(contentsOf: fileURL))
+            guard loaded.schemaVersion == 1,
+                  loaded.current.map(Self.isValidActive) ?? true,
+                  loaded.history.allSatisfy(Self.isValidHistory) else {
+                throw JournalError.unsupportedData
+            }
+            state = loaded
+        } else {
+            state = .empty
+        }
+    }
+
+    public func setTitle(_ value: String) throws {
+        let existing = state.current?.kind == .focus ? state.current?.title : state.draftTitle
+        guard value != existing else { return }
+        try update { workspace in
+            if workspace.current?.kind == .focus {
+                workspace.current?.title = value
+            } else {
+                workspace.draftTitle = value
+            }
+        }
+    }
+
+    public func setNotes(_ value: String) throws {
+        let existing = state.current?.kind == .focus ? state.current?.notes : state.draftNotes
+        guard value != existing else { return }
+        try update { workspace in
+            if workspace.current?.kind == .focus {
+                workspace.current?.notes = value
+            } else {
+                workspace.draftNotes = value
+            }
+        }
+    }
+
+    public func start(at now: Date = Date()) throws {
+        guard state.current == nil else { throw JournalError.invalidTransition }
+        let kind = state.nextKind
+        let title = state.draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard kind == .rest || !title.isEmpty else { throw JournalError.titleRequired }
+        try update { workspace in
+            workspace.current = Session(
+                id: UUID(), kind: kind, title: kind == .focus ? title : kind.label,
+                notes: kind == .focus ? workspace.draftNotes : "", startedAt: now,
+                endedAt: nil, status: .running, duration: kind.duration,
+                remaining: kind.duration, deadline: now.addingTimeInterval(kind.duration)
+            )
+            if kind == .focus {
+                workspace.draftTitle = ""
+                workspace.draftNotes = ""
+            }
+        }
+    }
+
+    public func pause(at now: Date = Date()) throws {
+        guard let session = state.current, session.status == .running,
+              let deadline = session.deadline else { throw JournalError.invalidTransition }
+        if deadline <= now {
+            try reconcile(at: now)
+            return
+        }
+        try update { workspace in
+            workspace.current?.remaining = min(session.duration, deadline.timeIntervalSince(now))
+            workspace.current?.deadline = nil
+            workspace.current?.status = .paused
+        }
+    }
+
+    public func resume(at now: Date = Date()) throws {
+        guard let session = state.current, session.status == .paused else {
+            throw JournalError.invalidTransition
+        }
+        try update { workspace in
+            workspace.current?.deadline = now.addingTimeInterval(session.remaining)
+            workspace.current?.status = .running
+        }
+    }
+
+    public func stop(at now: Date = Date()) throws {
+        guard state.current != nil else { throw JournalError.invalidTransition }
+        if let deadline = state.current?.deadline, deadline <= now {
+            try reconcile(at: now)
+            return
+        }
+        try update { workspace in
+            guard var session = workspace.current else { return }
+            if let deadline = session.deadline {
+                session.remaining = min(session.duration, max(0, deadline.timeIntervalSince(now)))
+            }
+            session.status = .stopped
+            session.deadline = nil
+            session.endedAt = now
+            workspace.history.insert(session, at: 0)
+            workspace.current = nil
+            workspace.nextKind = .focus
+        }
+    }
+
+    /// A completed interval is recorded once, even after an arbitrarily long absence.
+    public func reconcile(at now: Date = Date()) throws {
+        guard let session = state.current, let deadline = session.deadline,
+              deadline <= now else { return }
+        try update { workspace in
+            var completed = session
+            completed.status = .completed
+            completed.remaining = 0
+            completed.deadline = nil
+            completed.endedAt = deadline
+            workspace.history.insert(completed, at: 0)
+            workspace.current = nil
+            workspace.nextKind = completed.kind == .focus ? .rest : .focus
+        }
+    }
+
+    public func skipBreak() throws {
+        guard state.current == nil, state.nextKind == .rest else {
+            throw JournalError.invalidTransition
+        }
+        try update { $0.nextKind = .focus }
+    }
+
+    private func update(_ change: (inout Workspace) -> Void) throws {
+        var updated = state
+        change(&updated)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(updated)
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try data.write(to: fileURL, options: .atomic)
+        state = updated
+    }
+
+    private static func isValidActive(_ session: Session) -> Bool {
+        guard session.duration == session.kind.duration,
+              session.remaining.isFinite, session.remaining > 0,
+              session.remaining <= session.duration, session.endedAt == nil else { return false }
+        switch session.status {
+        case .running: return session.deadline != nil
+        case .paused: return session.deadline == nil
+        default: return false
+        }
+    }
+
+    private static func isValidHistory(_ session: Session) -> Bool {
+        session.duration == session.kind.duration && session.remaining.isFinite &&
+        session.remaining >= 0 && session.remaining <= session.duration &&
+        session.deadline == nil && session.endedAt != nil &&
+        (session.status == .completed || session.status == .stopped)
+    }
+}

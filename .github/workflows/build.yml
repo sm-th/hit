@@ -1,0 +1,110 @@
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  verify:
+    name: Verify and package
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF_TYPE" == tag ]]; then
+            version="${REF_NAME#v}"
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            grep -Fq "## [$version]" CHANGELOG.md
+          else
+            version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - name: Test durable timer behavior
+        run: swift test
+      - name: Build universal installers
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: bash scripts/build-app.sh "$VERSION"
+      - name: Launch packaged application
+        env:
+          HIT_SMOKE_SCREENSHOT: ${{ github.workspace }}/dist/Hit-smoke.png
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import subprocess
+          import sys
+          result = subprocess.run(
+              ["dist/Hit.app/Contents/MacOS/Hit", "--smoke-test"],
+              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+              text=True, timeout=45, env=os.environ.copy()
+          )
+          print(result.stdout)
+          if result.returncode != 0 or "SMOKE_TEST_PASSED" not in result.stdout:
+              sys.exit(result.returncode or 1)
+          PY
+      - name: Upload installers and visual proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Hit-macOS
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS
+            dist/Hit-smoke.png
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish release
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: Hit-macOS
+          path: release
+      - name: Publish tested installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          {
+            echo 'Native macOS Pomodoro timer with local task notes and history.'
+            echo
+            echo 'Requires macOS 13 or later. Universal Apple silicon + Intel build.'
+            echo
+            echo '**Installation:** open the DMG and drag Hit to Applications.'
+            echo '**Security:** ad-hoc signed, not Developer ID signed or notarized. macOS may require Privacy & Security → Open Anyway for a trusted download. See README before installing.'
+            echo
+            awk -v heading="## [$version]" '$0 ~ /^## / { if (found) exit; if (index($0, heading) == 1) { found=1; next } } found { print }' CHANGELOG.md
+          } > release-notes.md
+          gh release create "$TAG" --repo "$REPO" --verify-tag --title "Hit $version" \
+            --notes-file release-notes.md release/*.dmg release/*.zip release/SHA256SUMS
