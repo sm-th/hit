@@ -7,6 +7,7 @@ struct TimerView: View {
     @ObservedObject var model: AppModel
     let showHistory: () -> Void
     let resize: (CGSize) -> Void
+    @FocusState private var editingTitle: Bool
 
     var body: some View {
         VStack(spacing: 18) {
@@ -21,11 +22,8 @@ struct TimerView: View {
                 timer
                 if let error = model.error { saveError(error) }
                 if model.kind == .focus {
-                    DisclosureGroup("Task & notes", isExpanded: $model.detailsExpanded) {
+                    DisclosureGroup("Notes", isExpanded: $model.detailsExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
-                            TextField("Task name (optional)", text: $model.title)
-                                .textFieldStyle(.roundedBorder)
-                                .accessibilityIdentifier("taskTitle")
                             TextEditor(text: $model.notes)
                                 .font(.body)
                                 .scrollContentBackground(.hidden)
@@ -78,7 +76,20 @@ struct TimerView: View {
 
     private var timer: some View {
         VStack(spacing: 12) {
-            Text(model.kind.label).font(.callout).foregroundStyle(.secondary)
+            if model.kind == .focus {
+                TextField("Focus", text: $model.title)
+                    .textFieldStyle(.plain)
+                    .multilineTextAlignment(.center)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .focused($editingTitle)
+                    .onSubmit { editingTitle = false }
+                    .accessibilityLabel("Focus title")
+                    .accessibilityIdentifier("taskTitle")
+                    .help("Name this focus session. Changes save automatically.")
+            } else {
+                Text(model.kind.label).font(.callout).foregroundStyle(.secondary)
+            }
             Text(model.timeLabel)
                 .font(.system(size: 68, weight: .light, design: .rounded))
                 .monospacedDigit()

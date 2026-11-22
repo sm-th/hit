@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1] - 2026-11-22
+
+- Edit the title directly above the timer without opening Notes.
+- Save title edits automatically before or during a focus session; Enter ends editing.
+- Keep the title optional: clearing it restores the Focus placeholder without interrupting the timer.
+- Remove the duplicate title field from the notes disclosure.
+- Exercise the actual inline text editor and persisted titles in the packaged-app smoke test.
+
 ## [0.2.0] - 2026-11-22
 
 - Start focus immediately without entering a task name or notes.

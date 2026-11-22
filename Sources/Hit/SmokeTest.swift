@@ -20,6 +20,13 @@ enum SmokeTest {
                   let primary = findPrimaryButton(in: content), primary.isEnabled else {
                 throw Failure("The menu-bar panel has no enabled Start button")
             }
+            guard !app.model.detailsExpanded else { throw Failure("Notes should remain collapsed") }
+            try await enterTitle("Before starting", in: app)
+            let draft = try Journal(fileURL: app.model.fileURL)
+            guard draft.state.draftTitle == "Before starting" else {
+                throw Failure("The inline title did not save before starting")
+            }
+            try await enterTitle("", in: app)
             guard app.model.title.isEmpty, app.model.notes.isEmpty else {
                 throw Failure("The fresh workspace unexpectedly requires task input")
             }
@@ -35,7 +42,16 @@ enum SmokeTest {
             primary.performClick(nil)
             guard app.model.current?.status == .running else { throw Failure("Resume did not work") }
 
-            app.model.title = "Write the first draft"
+            try await enterTitle("Write the first draft", in: app)
+            let renamed = try Journal(fileURL: app.model.fileURL)
+            guard !app.model.detailsExpanded, renamed.state.current?.title == "Write the first draft" else {
+                throw Failure("Inline naming required opening Notes or failed to save")
+            }
+            try await enterTitle("", in: app)
+            guard app.model.current?.title == "", app.model.current?.status == .running else {
+                throw Failure("Clearing the optional title interrupted the timer")
+            }
+            try await enterTitle("Write the first draft", in: app)
             app.model.notes = "Started first. Added a thought along the way."
             let beforeClosing = app.model.secondsRemaining
             app.popover.performClose(nil)
@@ -62,7 +78,7 @@ enum SmokeTest {
                 let details = URL(fileURLWithPath: path).deletingPathExtension().path + "-notes.png"
                 try screenshot(details)
             }
-            print("SMOKE_TEST_PASSED: menu-bar Start/Pause/Resume, title-free start, hidden-panel countdown, durable optional notes")
+            print("SMOKE_TEST_PASSED: inline title editing and clearing before/during focus with Notes closed, menu-bar controls, hidden countdown, durable notes")
             fflush(stdout)
             app.popover.performClose(nil)
             // Exit directly after cleanup, without invoking regular quit-time saving.
@@ -72,6 +88,37 @@ enum SmokeTest {
             fputs("SMOKE_TEST_FAILED: \(error.localizedDescription)\n", stderr)
             exit(1)
         }
+    }
+
+    private static func enterTitle(_ value: String, in app: HitApp) async throws {
+        guard let content = app.popover.contentViewController?.view,
+              let field = findTitleField(in: content),
+              let window = field.window, window.makeFirstResponder(field),
+              let editor = field.currentEditor() as? NSTextView else {
+            throw Failure("The title above the timer is not directly editable")
+        }
+        editor.selectAll(nil)
+        if value.isEmpty {
+            editor.deleteBackward(nil)
+        } else {
+            editor.insertText(value, replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let saved = try Journal(fileURL: app.model.fileURL)
+        guard (saved.state.current?.title ?? saved.state.draftTitle) == value else {
+            throw Failure("The inline title was not saved while typing")
+        }
+        // Enter ends editing; persistence is asserted independently of committing the field.
+        editor.insertNewline(nil)
+        try await Task.sleep(nanoseconds: 100_000_000)
+    }
+
+    private static func findTitleField(in view: NSView) -> NSTextField? {
+        if let field = view as? NSTextField, field.isEditable { return field }
+        for child in view.subviews {
+            if let found = findTitleField(in: child) { return found }
+        }
+        return nil
     }
 
     private static func findPrimaryButton(in view: NSView) -> NSButton? {
