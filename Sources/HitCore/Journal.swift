@@ -116,18 +116,8 @@ public final class Journal: ObservableObject {
     public func start(at now: Date = Date()) throws {
         guard state.current == nil else { throw JournalError.invalidTransition }
         let kind = state.nextKind
-        let title = state.draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         try update { workspace in
-            workspace.current = Session(
-                id: UUID(), kind: kind, title: kind == .focus ? title : kind.label,
-                notes: kind == .focus ? workspace.draftNotes : "", startedAt: now,
-                endedAt: nil, status: .running, duration: kind.duration,
-                remaining: kind.duration, deadline: now.addingTimeInterval(kind.duration)
-            )
-            if kind == .focus {
-                workspace.draftTitle = ""
-                workspace.draftNotes = ""
-            }
+            Self.startSession(in: &workspace, kind: kind, at: now)
         }
     }
 
@@ -162,40 +152,77 @@ public final class Journal: ObservableObject {
             return
         }
         try update { workspace in
-            guard var session = workspace.current else { return }
-            if let deadline = session.deadline {
-                session.remaining = min(session.duration, max(0, deadline.timeIntervalSince(now)))
-            }
-            session.status = .stopped
-            session.deadline = nil
-            session.endedAt = now
-            workspace.history.insert(session, at: 0)
+            guard let session = workspace.current else { return }
+            workspace.history.insert(Self.endedSession(session, at: now), at: 0)
             workspace.current = nil
             workspace.nextKind = .focus
         }
     }
 
-    /// A completed interval is recorded once, even after an arbitrarily long absence.
+    /// Only breaks start automatically. Catch-up is bounded to one focus and its break.
+    /// Completion and the next interval are committed in one atomic save.
     public func reconcile(at now: Date = Date()) throws {
-        guard let session = state.current, let deadline = session.deadline,
-              deadline <= now else { return }
+        guard let deadline = state.current?.deadline, deadline <= now else { return }
         try update { workspace in
-            var completed = session
-            completed.status = .completed
-            completed.remaining = 0
-            completed.deadline = nil
-            completed.endedAt = deadline
-            workspace.history.insert(completed, at: 0)
-            workspace.current = nil
-            workspace.nextKind = completed.kind == .focus ? .rest : .focus
+            while let session = workspace.current, let deadline = session.deadline, deadline <= now {
+                let completed = Self.endedSession(session, at: deadline)
+                workspace.history.insert(completed, at: 0)
+                workspace.current = nil
+                workspace.nextKind = .focus
+                if completed.kind == .focus {
+                    Self.startSession(in: &workspace, kind: .rest, at: deadline)
+                }
+            }
         }
     }
 
-    public func skipBreak() throws {
-        guard state.current == nil, state.nextKind == .rest else {
+    public func skipBreak(at now: Date = Date()) throws {
+        guard state.current?.kind == .rest || (state.current == nil && state.nextKind == .rest) else {
             throw JournalError.invalidTransition
         }
-        try update { $0.nextKind = .focus }
+        try update { workspace in
+            let ended: Session
+            if let session = workspace.current {
+                ended = Self.endedSession(session, at: now)
+            } else {
+                // A pending break saved by an earlier release was skipped without being started.
+                let kind = SessionKind.rest
+                ended = Session(
+                    id: UUID(), kind: kind, title: kind.label, notes: "",
+                    startedAt: now, endedAt: now, status: .stopped,
+                    duration: kind.duration, remaining: kind.duration, deadline: nil
+                )
+            }
+            workspace.history.insert(ended, at: 0)
+            Self.startSession(in: &workspace, kind: .focus, at: now)
+        }
+    }
+
+    private static func startSession(in workspace: inout Workspace, kind: SessionKind, at now: Date) {
+        workspace.current = Session(
+            id: UUID(), kind: kind,
+            title: kind == .focus ? workspace.draftTitle.trimmingCharacters(in: .whitespacesAndNewlines) : kind.label,
+            notes: kind == .focus ? workspace.draftNotes : "", startedAt: now,
+            endedAt: nil, status: .running, duration: kind.duration,
+            remaining: kind.duration, deadline: now.addingTimeInterval(kind.duration)
+        )
+        workspace.nextKind = kind
+        if kind == .focus {
+            workspace.draftTitle = ""
+            workspace.draftNotes = ""
+        }
+    }
+
+    private static func endedSession(_ session: Session, at now: Date) -> Session {
+        var ended = session
+        let expired = session.deadline.map { $0 <= now } ?? false
+        ended.status = expired ? .completed : .stopped
+        ended.endedAt = expired ? session.deadline : now
+        if let deadline = session.deadline {
+            ended.remaining = min(session.duration, max(0, deadline.timeIntervalSince(now)))
+        }
+        ended.deadline = nil
+        return ended
     }
 
     private func update(_ change: (inout Workspace) -> Void) throws {

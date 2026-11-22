@@ -2,12 +2,18 @@ import Combine
 import Foundation
 import HitCore
 
+enum BreakNotice: Equatable {
+    case started(UUID)
+    case completed(UUID)
+}
+
 /// Shared by the menu-bar panel and history. No timer or draft depends on a visible window.
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var journal: Journal?
     @Published private(set) var error: String?
     @Published private(set) var now = Date()
+    @Published private(set) var breakNotice: BreakNotice?
     @Published var detailsExpanded = false
     @Published var title = "" { didSet { persistEdits() } }
     @Published var notes = "" { didSet { persistEdits() } }
@@ -37,9 +43,11 @@ final class AppModel: ObservableObject {
     func load() {
         do {
             let loaded = try Journal(fileURL: fileURL)
+            let previous = loaded.state.current
             try loaded.reconcile()
             journal = loaded
             synchronizeDraft()
+            updateBreakNotice(previous: previous, restoring: true)
             now = Date()
             error = nil
         } catch {
@@ -92,13 +100,31 @@ final class AppModel: ObservableObject {
     private func perform(_ action: (Journal) throws -> Void) {
         do {
             guard let journal else { throw JournalError.invalidTransition }
+            let previous = journal.state.current
             try flushEdits()
             try action(journal)
             if journal.state.current?.id != sessionID { synchronizeDraft() }
+            updateBreakNotice(previous: previous)
             now = Date()
             error = nil
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    private func updateBreakNotice(previous: Session?, restoring: Bool = false) {
+        if let current, current.kind == .rest {
+            if restoring || current.id != previous?.id {
+                breakNotice = .started(current.id)
+            }
+        } else if current == nil, let previous,
+                  let finished = journal?.state.history.first,
+                  finished.kind == .rest, finished.status == .completed,
+                  finished.id == previous.id ||
+                    (previous.kind == .focus && previous.deadline == finished.startedAt) {
+            breakNotice = .completed(finished.id)
+        } else if current?.kind == .focus || previous?.kind == .rest {
+            breakNotice = nil
         }
     }
 
@@ -108,6 +134,6 @@ final class AppModel: ObservableObject {
         sessionID = current?.id
         title = current?.kind == .focus ? (current?.title ?? "") : (journal?.state.draftTitle ?? "")
         notes = current?.kind == .focus ? (current?.notes ?? "") : (journal?.state.draftNotes ?? "")
-        if current == nil { detailsExpanded = false }
+        if current?.kind != .focus { detailsExpanded = false }
     }
 }

@@ -12,6 +12,9 @@ final class HitApp: NSObject, NSApplicationDelegate {
     private var historyWindow: NSWindow?
     private var subscription: AnyCancellable?
     private var ticker: Timer?
+    private(set) lazy var breakPresenter = BreakPresenter(model: model) { [weak self] in
+        self?.popover.performClose(nil)
+    }
 
     static func main() {
         let application = NSApplication.shared
@@ -47,6 +50,7 @@ final class HitApp: NSObject, NSApplicationDelegate {
             rootView: TimerView(
                 model: model,
                 showHistory: { [weak self] in self?.showHistory() },
+                showBreak: { [weak self] in self?.breakPresenter.present() },
                 resize: { [weak self] size in self?.popover.contentSize = size }
             )
         )
@@ -59,7 +63,7 @@ final class HitApp: NSObject, NSApplicationDelegate {
         RunLoop.main.add(timer, forMode: .common)
         ticker = timer
         updateStatus()
-        showPanel()
+        if !breakPresenter.isVisible { showPanel() }
 
         if CommandLine.arguments.contains("--smoke-test") {
             Task { await SmokeTest.run(app: self) }
@@ -106,6 +110,7 @@ final class HitApp: NSObject, NSApplicationDelegate {
         button.title = " " + model.timeLabel
         button.toolTip = model.error ?? "Hit · \(model.kind.label) · \(model.primaryTitle)"
         button.setAccessibilityLabel("Hit, \(model.kind.label), \(model.timeLabel), \(model.primaryTitle)")
+        breakPresenter.synchronize()
     }
 
     @objc func showHistory() {
