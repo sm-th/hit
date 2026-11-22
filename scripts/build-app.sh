@@ -24,7 +24,7 @@ cp Resources/Info.plist "$app/Contents/Info.plist"
 swift scripts/make-icon.swift "$output/Hit.iconset"
 iconutil -c icns "$output/Hit.iconset" -o "$app/Contents/Resources/Hit.icns"
 cp LICENSE "$app/Contents/Resources/LICENSE"
-lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/Hit"
+lipo "$app/Contents/MacOS/Hit" -verify_arch arm64 x86_64
 codesign --force --sign - --timestamp=none "$app"
 codesign --verify --strict "$app"
 name="Hit-$version-universal"
