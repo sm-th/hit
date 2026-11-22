@@ -69,7 +69,7 @@ jobs:
             dist/*.dmg
             dist/*.zip
             dist/SHA256SUMS
-            dist/Hit-smoke.png
+            dist/Hit-smoke*.png
           if-no-files-found: error
           retention-days: 14
 
