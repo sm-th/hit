@@ -31,7 +31,7 @@ Checksums detect damaged downloads; they are not a substitute for Developer ID v
 
 Open Hit and click **Start Focus**. No task name or notes are required. The compact panel is available from the timer icon and countdown in the macOS menu bar. Use **Pause** or **Resume** on the same main button.
 
-Expand **Task & notes** whenever you want to name the current session or write a comment. Edits save automatically. The block stays collapsed until you open it; History is a separate window rather than a permanent sidebar.
+Click **Focus** directly above the timer and type a title, before starting or while working. It saves automatically as you type; press **Enter** to finish editing. Clear it to return to the **Focus** placeholder. Expand **Notes** only when you want to write a comment. No disclosure or extra naming dialog is needed to change the title. History remains in a separate window.
 
 Click outside the panel to dismiss it. Hit stays in the menu bar, keeps counting down, and records completion even when no panel or window is open. Click its menu-bar item to open it again. Closing History does not quit Hit. Choose **Quit** in the panel to exit the app completely. Hit does not occupy the Dock.
 
@@ -58,7 +58,7 @@ Install Xcode 15 or later (or its command-line tools) on macOS:
 ```sh
 swift test
 swift run Hit
-bash scripts/build-app.sh 0.2.0
+bash scripts/build-app.sh 0.2.1
 open dist/Hit.app
 ```
 
@@ -77,11 +77,11 @@ The packaging script builds one universal executable for arm64 and x86_64, creat
 For example:
 
 ```sh
-git tag -a v0.2.0 -m "Hit 0.2.0"
-git push origin v0.2.0
+git tag -a v0.2.1 -m "Hit 0.2.1"
+git push origin v0.2.1
 ```
 
-The app's `--smoke-test` mode is for CI: it clicks the real menu-bar button and native timer control, verifies title-free start, pause/resume, countdown with the panel closed, and persistence of optional task notes, then exits. Set `HIT_SMOKE_SCREENSHOT` to capture the compact panel and expanded notes. It never reads or writes your normal workspace.
+The app's `--smoke-test` mode is for CI: it clicks the real menu-bar button and native timer control, edits and clears the inline title through its native text editor with Notes closed, and checks persistence before and during a session. It also verifies title-free start, pause/resume, countdown with the panel closed, and saved notes. Set `HIT_SMOKE_SCREENSHOT` to capture the compact panel and expanded notes. It never reads or writes your normal workspace.
 
 ## License
 
