@@ -49,13 +49,11 @@ public struct Workspace: Codable {
 }
 
 public enum JournalError: LocalizedError {
-    case titleRequired
     case invalidTransition
     case unsupportedData
 
     public var errorDescription: String? {
         switch self {
-        case .titleRequired: return "Enter a task title before starting a focus session."
         case .invalidTransition: return "This action is not available for the current timer state."
         case .unsupportedData:
             return "The saved workspace is invalid or uses an unsupported version. Your file has not been changed."
@@ -119,7 +117,6 @@ public final class Journal: ObservableObject {
         guard state.current == nil else { throw JournalError.invalidTransition }
         let kind = state.nextKind
         let title = state.draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard kind == .rest || !title.isEmpty else { throw JournalError.titleRequired }
         try update { workspace in
             workspace.current = Session(
                 id: UUID(), kind: kind, title: kind == .focus ? title : kind.label,

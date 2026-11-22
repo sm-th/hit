@@ -119,14 +119,30 @@ final class JournalTests: XCTestCase {
     }
 
     @MainActor
-    func testBlankTitleCannotStartAndCannotOverwriteAnActiveSession() async throws {
+    func testUntitledFocusStartsImmediatelyAndCanBeNamedWhileRunning() async throws {
+        try withJournal { journal, url in
+            try journal.start(at: start)
+            XCTAssertEqual(journal.state.current?.status, .running)
+            XCTAssertEqual(journal.state.current?.secondsRemaining(at: start), 1500)
+            XCTAssertEqual(journal.state.current?.title, "")
+            try journal.setTitle("A name added later")
+            try journal.setNotes("A thought captured after starting.")
+            let reopened = try Journal(fileURL: url)
+            XCTAssertEqual(reopened.state.current?.title, "A name added later")
+            XCTAssertEqual(reopened.state.current?.notes, "A thought captured after starting.")
+            XCTAssertEqual(reopened.state.current?.startedAt, start)
+        }
+    }
+
+    @MainActor
+    func testWhitespaceTitleIsOptionalAndAnActiveSessionCannotBeReplaced() async throws {
         try withJournal { journal, _ in
             try journal.setTitle(" \n ")
-            XCTAssertThrowsError(try journal.start(at: start))
-            try journal.setTitle("A real task")
             try journal.start(at: start)
+            let originalID = journal.state.current?.id
+            XCTAssertEqual(journal.state.current?.title, "")
             XCTAssertThrowsError(try journal.start(at: start.addingTimeInterval(5)))
-            XCTAssertEqual(journal.state.current?.title, "A real task")
+            XCTAssertEqual(journal.state.current?.id, originalID)
             XCTAssertEqual(journal.state.current?.startedAt, start)
         }
     }
