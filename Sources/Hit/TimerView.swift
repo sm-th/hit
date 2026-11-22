@@ -6,6 +6,7 @@ import SwiftUI
 struct TimerView: View {
     @ObservedObject var model: AppModel
     let showHistory: () -> Void
+    let showBreak: () -> Void
     let resize: (CGSize) -> Void
     @FocusState private var editingTitle: Bool
 
@@ -94,12 +95,18 @@ struct TimerView: View {
                 .font(.system(size: 68, weight: .light, design: .rounded))
                 .monospacedDigit()
                 .accessibilityLabel("Time remaining, \(model.timeLabel)")
-            PrimaryTimerButton(
+            TimerActionButton(
                 title: model.primaryTitle, symbol: model.primarySymbol,
                 enabled: model.journal != nil, action: model.toggleTimer
             )
             .frame(width: 150, height: 36)
-            if model.current != nil {
+            if model.current?.kind == .rest {
+                HStack(spacing: 16) {
+                    Button("Show Break", action: showBreak)
+                    Button("Skip Break") { model.skipBreak() }
+                }
+                .buttonStyle(.borderless).font(.caption)
+            } else if model.current != nil {
                 Button("Finish Early") { model.finishEarly() }
                     .buttonStyle(.borderless).font(.caption).foregroundStyle(.secondary)
             } else if model.kind == .rest {
@@ -122,21 +129,21 @@ struct TimerView: View {
 
 /// A native, keyboard-focusable control, also exercised directly by the packaged-app smoke test.
 @MainActor
-struct PrimaryTimerButton: NSViewRepresentable {
+struct TimerActionButton: NSViewRepresentable {
     let title: String
     let symbol: String
     let enabled: Bool
     let action: () -> Void
+    var prominent = true
+    var identifier = "primaryTimerAction"
 
     func makeCoordinator() -> Coordinator { Coordinator(action: action) }
 
     func makeNSView(context: Context) -> NSButton {
         let button = NSButton(title: title, target: context.coordinator, action: #selector(Coordinator.press))
-        button.identifier = NSUserInterfaceItemIdentifier("primaryTimerAction")
+        button.identifier = NSUserInterfaceItemIdentifier(identifier)
         button.bezelStyle = .rounded
         button.controlSize = .large
-        button.bezelColor = .systemTeal
-        button.contentTintColor = .white
         return button
     }
 
@@ -147,6 +154,8 @@ struct PrimaryTimerButton: NSViewRepresentable {
         button.imagePosition = .imageLeading
         button.isEnabled = enabled
         button.setAccessibilityLabel(title)
+        button.bezelColor = prominent ? .systemTeal : nil
+        button.contentTintColor = prominent ? .white : nil
     }
 
     final class Coordinator: NSObject {
@@ -173,7 +182,7 @@ struct HistoryView: View {
                             Text(session.title.isEmpty ? session.kind.label : session.title).font(.headline)
                             Text(session.startedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
                                 .font(.caption).foregroundStyle(.secondary)
-                            Text(session.status == .completed ? "Completed" : "Stopped early")
+                            Text(session.status == .completed ? "Completed" : (session.kind == .rest ? "Skipped" : "Stopped early"))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 6)

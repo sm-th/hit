@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0] - 2026-11-22
+
+- Automatically start a five-minute break at the completed focus deadline.
+- Present a full-screen Break countdown over the desktop, including the menu bar and Dock.
+- Minimize with a button or Escape without pausing; restore the view from the menu-bar panel.
+- Show a full-screen Break complete message with the actual finish time; next focus starts manually.
+- Add Skip Break to the full-screen view and panel, recording the break and immediately starting focus.
+- Keep completed and skipped breaks as separate history records with timestamps and active-time data.
+- Save phase transitions atomically and catch up after sleep or quit without fabricating extra focus sessions.
+- Preserve the existing workspace schema, titles, notes, and history.
+- Verify full-screen transitions, real dismissal and skip controls, persisted break records, and duration accounting.
+
 ## [0.2.1] - 2026-11-22
 
 - Edit the title directly above the timer without opening Notes.
